@@ -287,7 +287,7 @@ public class SystemUIB extends BaseLoad {
         // 移动网络图标
         boolean isEnabledDualRowSignal = PrefsBridge.getBoolean("system_ui_statusbar_network_icon_enable");
         initHook(new DualRowSignalHookV(), isEnabledDualRowSignal && !(
-                PrefsBridge.getStringAsInt("system_ui_status_bar_icon_mobile_network_signal_mode", 0) != 0 ||
+                PrefsBridge.getStringAsInt("system_ui_status_bar_icon_mobile_network_signal_mode", 0) >= 2 ||
                 PrefsBridge.getBoolean("system_ui_status_bar_icon_mobile_network_hide_card_1") ||
                 PrefsBridge.getBoolean("system_ui_status_bar_icon_mobile_network_hide_card_2")
             )
