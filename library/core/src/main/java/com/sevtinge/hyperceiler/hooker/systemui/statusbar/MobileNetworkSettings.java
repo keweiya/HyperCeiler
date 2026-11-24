@@ -102,7 +102,7 @@ public class MobileNetworkSettings extends DashboardFragment {
             mHideCard1.setSummary("");
             mHideCard2.setEnabled(true);
             mHideCard2.setSummary("");
-            if (signalMode == 1 || card1Checked || card2Checked) {
+            if (card1Checked || card2Checked) {
                 mDoubleMobile.setEnabled(false);
                 mDoubleMobile.setSummary(R.string.system_ui_statusbar_iconmanage_nosupport_mobile_network);
             } else {
