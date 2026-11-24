@@ -263,6 +263,8 @@ const TargetFunction kTargets[] = {
         {"FolderIconGetxController.folderIconSize",
          "FolderIconGetxController.folderIconSize", "文件夹图标宽高基准"},
         {"GridController.folderCellWidth", "GridController.folderCellWidth", "候选 文件夹格宽"},
+        {"GridController.folderGridViewCol", "GridController.folderGridViewCol", "米客文件夹列数 getter"},
+        {"FolderConfigHandler.handle", "FolderConfigHandler.handle", "米客文件夹格宽配置生产器"},
         {"GridController.screenMarginBottom", "GridController.screenMarginBottom",
          "候选 屏幕下边距"},
         {"GridController.calWidgetHoriPadding", "GridController.calWidgetHoriPadding",

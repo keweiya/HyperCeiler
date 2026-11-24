@@ -2886,3 +2886,111 @@ hc_recent_entries:
 .endm
 dock_position_splice hc_dock_position0_entry, 0
 dock_position_splice hc_dock_position1_entry, 1
+
+/* Pengeek FolderConfig producer: keep allocator/GC map and original consumers.
+ * Four non-call instructions are replayed explicitly, with the derived fields. */
+.globl hc_folder_mike_entry
+.p2align 4
+hc_folder_mike_entry:
+    dart_save
+    adrp x9, hc_folder_mike_ready
+    add x9, x9, :lo12:hc_folder_mike_ready
+    ldar w9, [x9]
+    cbz w9, 1f
+    sub sp, sp, #704
+    stp x0, x1, [sp, #0]
+    stp x2, x3, [sp, #16]
+    stp x4, x5, [sp, #32]
+    stp x6, x7, [sp, #48]
+    stp x8, x9, [sp, #64]
+    stp x10, x11, [sp, #80]
+    stp x12, x13, [sp, #96]
+    stp x14, x18, [sp, #112]
+    stp x15, x30, [sp, #128]
+    stp q0, q1, [sp, #160]
+    stp q2, q3, [sp, #192]
+    stp q4, q5, [sp, #224]
+    stp q6, q7, [sp, #256]
+    stp q8, q9, [sp, #288]
+    stp q10, q11, [sp, #320]
+    stp q12, q13, [sp, #352]
+    stp q14, q15, [sp, #384]
+    stp q16, q17, [sp, #416]
+    stp q18, q19, [sp, #448]
+    stp q20, q21, [sp, #480]
+    stp q22, q23, [sp, #512]
+    stp q24, q25, [sp, #544]
+    stp q26, q27, [sp, #576]
+    stp q28, q29, [sp, #608]
+    stp q30, q31, [sp, #640]
+    mov x0, sp
+    mov x1, x29
+    lsl x2, x28, #32
+    mov x3, x27
+    bl hc_folder_mike_body
+    ldp q0, q1, [sp, #160]
+    ldp q2, q3, [sp, #192]
+    ldp q4, q5, [sp, #224]
+    ldp q6, q7, [sp, #256]
+    ldp q8, q9, [sp, #288]
+    ldp q10, q11, [sp, #320]
+    ldp q12, q13, [sp, #352]
+    ldp q14, q15, [sp, #384]
+    ldp q16, q17, [sp, #416]
+    ldp q18, q19, [sp, #448]
+    ldp q20, q21, [sp, #480]
+    ldp q22, q23, [sp, #512]
+    ldp q24, q25, [sp, #544]
+    ldp q26, q27, [sp, #576]
+    ldp q28, q29, [sp, #608]
+    ldp q30, q31, [sp, #640]
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
+    ldp x4, x5, [sp, #32]
+    ldp x6, x7, [sp, #48]
+    ldp x8, x9, [sp, #64]
+    ldp x10, x11, [sp, #80]
+    ldp x12, x13, [sp, #96]
+    ldp x14, x18, [sp, #112]
+    ldp x15, x30, [sp, #128]
+    add sp, sp, #704
+    dart_restore
+    dynamic_store d0, x0, hc_folder_mike_width_field
+    dynamic_load d0, x29, hc_folder_mike_height_slot
+    dynamic_store d0, x0, hc_folder_mike_height_field
+    adrp x16, hc_folder_mike_continue
+    ldr x16, [x16, :lo12:hc_folder_mike_continue]
+    br x16
+1:
+    dart_restore
+    adrp x16, hc_folder_mike_original
+    ldr x16, [x16, :lo12:hc_folder_mike_original]
+    br x16
+
+/* Paired getter: replace ADD x0,x0,#6 only after both detours are live. */
+.globl hc_folder_mike_columns_entry
+.p2align 4
+hc_folder_mike_columns_entry:
+    dart_save
+    adrp x9, hc_folder_mike_ready
+    add x9, x9, :lo12:hc_folder_mike_ready
+    ldar w9, [x9]
+    cbz w9, 1f
+    adrp x9, hc_folder_mike_config
+    add x9, x9, :lo12:hc_folder_mike_config
+    ldar x9, [x9]
+    ubfx x10, x9, #27, #3
+    cmp x10, #4
+    b.lo 1f
+    cmp x10, #6
+    b.hi 1f
+    lsl x0, x10, #1
+    dart_restore
+    mov x15, x29
+    ldp x29, x30, [x15], #16
+    ret
+1:
+    dart_restore
+    adrp x16, hc_folder_mike_columns_original
+    ldr x16, [x16, :lo12:hc_folder_mike_columns_original]
+    br x16

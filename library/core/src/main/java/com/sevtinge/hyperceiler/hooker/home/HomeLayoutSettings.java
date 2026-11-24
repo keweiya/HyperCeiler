@@ -93,6 +93,15 @@ public class HomeLayoutSettings extends DashboardFragment {
         }
 
         BiConsumer<Boolean, Boolean> updateVisibility = (widthEnabled, paddingEnabled) -> {
+            // OS4 uses Pengeek's native FolderConfig geometry. Old extra-padding
+            // controls would fight that producer; retain their stored values for OS2/3.
+            if (isHyperOSVersion(4f)) {
+                mPadding.setVisible(false);
+                mPhone.setVisible(false);
+                mPadH.setVisible(false);
+                mPadV.setVisible(false);
+                return;
+            }
             mPadding.setVisible(widthEnabled);
             if (isPad()) {
                 boolean showPad = widthEnabled && paddingEnabled;
@@ -106,6 +115,14 @@ public class HomeLayoutSettings extends DashboardFragment {
             }
         };
 
+        if (isHyperOSVersion(4f)) {
+            SeekBarPreferenceCompat folderColumns = findPreference("prefs_key_home_folder_columns");
+            mWidth.setEnabled(getSharedPreferences().getInt("prefs_key_home_folder_columns", 3) > 3);
+            folderColumns.setOnPreferenceChangeListener((preference, value) -> {
+                mWidth.setEnabled(((Number) value).intValue() > 3);
+                return true;
+            });
+        }
         updateVisibility.accept(mWidthEnable, mPaddingEnable);
 
         mWidth.setOnPreferenceChangeListener((preference, o) -> {

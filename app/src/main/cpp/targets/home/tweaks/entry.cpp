@@ -725,9 +725,7 @@ void AcquireSitesBySymbols(State* state, const CodeView& code, uint32_t wanted, 
 
 bool NeedAcquire(const State* state, uint32_t wanted) {
     if ((MaskOf(state->sites) & wanted) != wanted) return true;
-    if ((wanted & kWantFolderCols) != 0 && !state->sites.ok16sq && !state->squareTried) {
-        return true;
-    }
+    // Getter-only folder layout deliberately has no square/animation patch.
     return false;
 }
 

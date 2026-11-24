@@ -33,7 +33,7 @@ void prime_home_layout_engine();
 void prime_home_layout_probe(int (*hook)(void *, void *, void **), int (*unhook)(void *));
 void home_layout_prepare_for_launcher_child();
 void prime_home_layout_knobs(int (*hook)(void *, void *, void **), int (*unhook)(void *));
-void prime_home_layout_first_render(int (*hook)(void *, void *, void **),int (*unhook)(void *));
+void prime_home_folder_mike(int (*hook)(void *, void *, void **),int (*unhook)(void *));
 
 void notify_home_layout_library_loaded();
 void home_layout_set_desktop_title_size(int sp);
@@ -322,7 +322,12 @@ void on_library_loaded(const char *name, void *) {
     const bool launcher_library = is_library(library_name, "libapp_launcher.so");
     if (launcher) start_home_layout_hooks("library", g_hook_function, g_unhook_function);
     if (launcher && (dart_library || launcher_library)) notify_home_layout_library_loaded();
-    if (launcher && dart_library) home_layout_engine::HomeLayoutEngineOnLibraryLoaded(name);
+    if (launcher && dart_library) {
+        // Last synchronous window before Dart runs. Only this folder pair is
+        // installed here; every other bank keeps its existing schedule.
+        prime_home_folder_mike(g_hook_function, g_unhook_function);
+        home_layout_engine::HomeLayoutEngineOnLibraryLoaded(name);
+    }
     if (launcher) {
         home_layout_engine::HomeLayoutEnginePrepareForLauncherChild();
         home_layout_engine::StartHomeLayoutEngine();

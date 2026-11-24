@@ -50,6 +50,7 @@ extern "C" void hc_home_diagnostic_sample();
 #include "home_hotseat_margin.h"
 #include "home_dock_edit.h"
 #include "home_folder_title.h"
+#include "home_folder_mike_layout.h"
 #include "home_widget_move.h"
 #include "home_gadget_bridge.h"
 #include "home_layout_elf_targets.h"
@@ -185,6 +186,16 @@ void *hc_grid_autofit_original[2]{};
 uintptr_t hc_grid_autofit_resume[2]{};
 uint32_t hc_grid_autofit_ready = 0, hc_grid_autofit_requested = 0;
 int hc_grid_autofit_body(uintptr_t saved, uintptr_t frame, unsigned kind);
+void hc_folder_mike_entry();
+void hc_folder_mike_columns_entry();
+void *hc_folder_mike_columns_original = nullptr;
+uint64_t hc_folder_mike_config = 0;
+void *hc_folder_mike_original = nullptr;
+uintptr_t hc_folder_mike_continue = 0;
+int64_t hc_folder_mike_width_slot = 0, hc_folder_mike_height_slot = 0;
+int64_t hc_folder_mike_width_field = 0, hc_folder_mike_height_field = 0;
+uint32_t hc_folder_mike_ready = 0;
+void hc_folder_mike_body(uintptr_t saved, uintptr_t frame, uintptr_t heap, uintptr_t pool);
 void hc_folder_layout_0_entry(); void hc_folder_layout_1_entry();
 void hc_folder_layout_2_entry(); void hc_folder_layout_3_entry();
 void hc_folder_layout_4_entry(); void hc_folder_layout_5_entry();
@@ -541,7 +552,9 @@ constexpr size_t kInfiniteSlotBase = kDockPositionSlotBase + 2;
 constexpr size_t kCustomTitleDrawerSlot = kInfiniteSlotBase + 2;
 constexpr size_t kShortcutManagementSlot = kCustomTitleDrawerSlot + 1;
 constexpr size_t kRecentsHapticSlotBase = kShortcutManagementSlot + 1;
-constexpr size_t kSlotCount = kRecentsHapticSlotBase + 7;
+constexpr size_t kFolderMikeSlot = kRecentsHapticSlotBase + 7;
+constexpr size_t kFolderMikeColumnsSlot = kFolderMikeSlot + 1;
+constexpr size_t kSlotCount = kFolderMikeColumnsSlot + 1;
 using Slot = nhk::InlineSlot<kPatchWords>;
 using Words = nhk::SlotWords<kPatchWords>;
 /* The companion slot's payload, declared here because `Words` only exists from this line down. */
@@ -613,8 +626,10 @@ static thread_local home_layout::FolderPreviewSnapshot g_folder_preview_snapshot
 // stash is enough and keeps us from re-deriving the index from the constrained grid.
 static thread_local home_layout::FolderPreviewIndexCarry g_folder_preview_index_carry;
 static bool folder_preview_requested(uint64_t packed) {
-    const int cols = int((packed >> 27) & 7);
-    return cols >= 3 && cols <= 6 && (cols != 3 || (packed & 2));
+    // Pengeek publishes the width into FolderConfig itself. Original layout and
+    // animation now share it; never add the old endpoint/scale compensation.
+    (void)packed;
+    return false;
 }
 bool g_folder_layout_bound = false, g_folder_layout_checked = false;
 /*
@@ -1367,6 +1382,11 @@ struct DartLibrary {
 };
 
 std::optional<DartLibrary> g_dart;
+home_layout::FolderMikeSite g_folder_mike_fields{};
+bool g_folder_mike_bound = false;
+uint32_t g_folder_mike_owner = 0, g_folder_mike_columns_site = 0;
+thread_local bool g_folder_mike_startup_window = false;
+bool bind_folder_mike();
 struct RuntimeFeatures {
     std::optional<home_layout::features::ReportFeature> report;
     std::optional<home_layout::features::shortcuts::Plan> shortcuts;
@@ -2263,7 +2283,7 @@ home_layout_engine::Config make_layout_engine_config(const home_layout::Config &
     home_layout_engine::Config tweaks;
     tweaks.flags = 1u; // master on
     if (values.grid_enabled) tweaks.enabled.push_back(home_layout_engine::kFeaturePhoneGrid);
-    if (values.tweaks.folder_enabled) tweaks.enabled.push_back(home_layout_engine::kFeatureFolderCols);
+    // Folder columns are owned by the paired pre-first-use native slots, not the asynchronous planner.
     if (values.tweaks.pad_enabled) tweaks.enabled.push_back(home_layout_engine::kFeaturePadGrid);
     if (values.tweaks.fold_enabled) tweaks.enabled.push_back(home_layout_engine::kFeatureFoldGrid);
     // Real render inputs own icon scaling; do not also scale the legacy calculators.
@@ -2282,7 +2302,7 @@ home_layout_engine::Config make_layout_engine_config(const home_layout::Config &
 }
 
 void push_tweaks(const home_layout::Config &values) {
-    const auto tweaks=make_layout_engine_config(values);
+    auto tweaks=make_layout_engine_config(values);
     __android_log_print(ANDROID_LOG_INFO, kTag,
         "layout tweaks grid=%d/%dx%d folder=%d/%d pad=%d/%d fold=%d/%d icon=%d noClear=%d "
         "hideClear=%d", values.grid_enabled ? 1 : 0, values.cell_x, values.cell_y,
@@ -2742,12 +2762,32 @@ bool bind_folder_probe() {
     return true;
 }
 
+bool bind_folder_mike() {
+    if (g_folder_mike_bound) return true;
+    // Never splice a cached FolderConfig producer for the first time on a worker.
+    if (!g_folder_mike_startup_window || !g_dart || !g_folder_mike_owner || !g_folder_mike_columns_site) return false;
+    const auto &fields = g_folder_mike_fields;
+    Slot producer{}, columns{};
+    if (!bind_dart_target(g_folder_mike_owner + fields.window, producer.address, producer.source, producer.original_words)
+        || !bind_dart_target(g_folder_mike_columns_site, columns.address, columns.source, columns.original_words)) return false;
+    producer.replacement = reinterpret_cast<void *>(hc_folder_mike_entry);
+    producer.original = &hc_folder_mike_original;
+    columns.replacement = reinterpret_cast<void *>(hc_folder_mike_columns_entry);
+    columns.original = &hc_folder_mike_columns_original;
+    hc_folder_mike_continue = g_dart->load_base + fields.continuation;
+    hc_folder_mike_width_slot = fields.width_slot; hc_folder_mike_height_slot = fields.height_slot;
+    hc_folder_mike_width_field = fields.width_field; hc_folder_mike_height_field = fields.height_field;
+    g_slots[kFolderMikeSlot] = producer; g_slots[kFolderMikeColumnsSlot] = columns;
+    g_folder_mike_bound = true;
+    return true;
+}
+
 bool bind_folder_layout() {
     if (g_folder_layout_bound) return true;
     if (g_folder_layout_checked) return false;
     const uint64_t now = monotonic_ms();
     if (g_folder_layout_retry_at_ms && (!now || now < g_folder_layout_retry_at_ms)) return false;
-    if (!g_dart || !(__atomic_load_n(&hc_folder_layout_requested, __ATOMIC_ACQUIRE) & 3)) {
+    if (!g_dart || !(__atomic_load_n(&hc_folder_layout_requested, __ATOMIC_ACQUIRE) & 1)) {
         /*
          * This gate is polled on every pass of the layout loop, so a "not yet" answer is normal
          * and must stay quiet. A "not ever" answer is not: without this line a launcher whose
@@ -2940,6 +2980,7 @@ bool bind_folder_layout() {
         reinterpret_cast<void *>(hc_folder_layout_5_entry), reinterpret_cast<void *>(hc_folder_layout_6_entry), reinterpret_cast<void *>(hc_folder_layout_7_entry)};
     std::array<Slot, 8> prepared{};
     for (size_t i = 0; i < prepared.size(); ++i) {
+        if (i != 4 && i != 5 && i != 7) continue; // title only; old width/padding stays stock
         auto &slot = prepared[i];
         // Slot 7 is the only one whose target is not expressed as symbol+offset: the
         // replay window is an absolute VA derived from _buildText's own instructions,
@@ -4885,7 +4926,8 @@ size_t arm_hooks(std::vector<size_t> &order) {
         const size_t index = kGridAutofitSlotBase + i;
         if (std::find(order.begin(), order.end(), index) == order.end()) { order.push_back(index); ++added; }
     }
-    if (g_folder_layout_bound) for (size_t i = 0; i < 8; ++i) {
+    // Paired folder slots are installed only by their pre-first-use entry.
+    if (g_folder_layout_bound) for (size_t i : {size_t(4), size_t(5), size_t(7)}) {
         const size_t index = kFolderLayoutSlotBase + i;
         if (std::find(order.begin(), order.end(), index) == order.end()) { order.push_back(index); ++added; }
     }
@@ -5054,7 +5096,11 @@ size_t publish_hooks() {
     for (size_t i = 0; i < 2; ++i) autofit_ready &= nhk::slot_ready(g_slots[kGridAutofitSlotBase + i]);
     __atomic_store_n(&hc_grid_autofit_ready, autofit_ready ? 1u : 0u, __ATOMIC_RELEASE);
     bool folder_layout_ready = g_folder_layout_bound;
-    for (size_t i = 0; i < 8; ++i) folder_layout_ready &= nhk::slot_ready(g_slots[kFolderLayoutSlotBase + i]);
+    for (size_t i : {size_t(4), size_t(5), size_t(7)}) folder_layout_ready &= nhk::slot_ready(g_slots[kFolderLayoutSlotBase + i]);
+    // Publication never revives a pair that failed during its first-use window.
+    if (__atomic_load_n(&hc_folder_mike_ready, __ATOMIC_ACQUIRE) &&
+        (!nhk::slot_ready(g_slots[kFolderMikeSlot]) || !nhk::slot_ready(g_slots[kFolderMikeColumnsSlot])))
+        __atomic_store_n(&hc_folder_mike_ready, 0u, __ATOMIC_RELEASE);
     __atomic_store_n(&hc_folder_layout_ready, folder_layout_ready ? 1u : 0u, __ATOMIC_RELEASE);
     __atomic_store_n(&hc_gadget_bridge_enabled,
         uint32_t(g_gadget_requested.load(std::memory_order_acquire)
@@ -5611,6 +5657,7 @@ void *worker(void *) {
     (void) bind_title_hide();
     arm_hooks(order);
     publish_hooks();
+    push_tweaks(config); // independent non-folder planner features
     (void) sync_hotseat_capacity(config.tweaks.hotseat_unlimited);
     (void) sync_widget_move(config.widget_allow_move);
     (void) sync_folder_auto_close(config.folder_auto_close);
@@ -6353,6 +6400,37 @@ extern "C" void hc_folder_probe_body(uintptr_t saved, uintptr_t frame, unsigned 
     }
 }
 
+// Runs after the original allocator, before its width publication. No Dart
+// calls, allocation or retained heap references; the original GC return PC stays put.
+extern "C" void hc_folder_mike_body(uintptr_t saved, uintptr_t frame, uintptr_t heap, uintptr_t pool) {
+    const auto &f = g_folder_mike_fields;
+    auto u32 = [](uintptr_t p) { uint32_t x; std::memcpy(&x, reinterpret_cast<const void *>(p), 4); return x; };
+    auto u64 = [](uintptr_t p) { uint64_t x; std::memcpy(&x, reinterpret_cast<const void *>(p), 8); return x; };
+    auto number = [](uintptr_t p) { double x; std::memcpy(&x, reinterpret_cast<const void *>(p), 8); return x; };
+    const double original = number(frame + f.width_slot);
+    double result = original;
+    const uint64_t packed = __atomic_load_n(&hc_folder_mike_config, __ATOMIC_ACQUIRE);
+    const unsigned columns = unsigned((packed >> 27) & 7);
+    if (columns > 3 && columns <= 6 && pool && heap) {
+        const uintptr_t config = u64(frame + f.config_slot);
+        if (config > 65536 && (config & 7) == 1) {
+            const uint32_t raw = u32(config + f.condition_field);
+            const uintptr_t condition = heap + raw;
+            if ((raw & 7) == 1 && raw != u32(pool + 0x40)) {
+                const home_layout::FolderMikeInputs input{original,
+                    number(config + f.screen_width_field), number(config + f.cell_width_field),
+                    int64_t(u64(config + f.count_cell_x_field)),
+                    u32(condition + f.device_kind_field) == u32(pool + f.pad_pool),
+                    u32(condition + f.launcher_mode_field) == u32(pool + f.jeejen_pool)};
+                result = home_layout::mike_folder_cell_width(input, int(columns), (packed & 2) != 0);
+            }
+        }
+    }
+    std::memcpy(reinterpret_cast<void *>(saved + 160), &result, 8);
+    const uint64_t zero = 0;
+    std::memcpy(reinterpret_cast<void *>(saved + 168), &zero, 8);
+}
+
 static thread_local double folder_layout_gap = 0;
 static thread_local bool folder_layout_gap_valid = false;
 extern "C" void hc_folder_layout_body(uintptr_t saved, uintptr_t pool, unsigned kind, uintptr_t heap) {
@@ -6774,6 +6852,9 @@ extern "C" void hc_layout_folder_body(uintptr_t frame, uint64_t heap, uintptr_t 
     const int top = ready ? g_knobs[2].delta_dp.load(std::memory_order_relaxed) : 0;
     const int bottom = ready ? g_knobs[3].delta_dp.load(std::memory_order_relaxed) : 0;
     const int side = ready ? g_knobs[4].delta_dp.load(std::memory_order_relaxed) : 0;
+    // No workspace-margin request: preserve original folder animation geometry.
+    // In particular, changing folder columns must not opt into rendered-snapshot compensation.
+    if (!top && !bottom && !side) return;
     const uint64_t hits_before = rendered_workspace.hits;
     const bool valid = home_layout::folder_geometry_body(frame, heap, saved, kind, top, bottom, side,
         &rendered_workspace, &g_grid_field,&g_folder_geometry_contract);
@@ -7159,6 +7240,10 @@ bool adopt_layout_state() {
     __atomic_store_n(&hc_grid_autofit_requested, 0u, __ATOMIC_RELEASE);
     for (size_t i = 0; i < 2; ++i) { hc_grid_autofit_original[i] = nullptr; hc_grid_autofit_resume[i] = 0; }
     g_folder_preview_bound = g_folder_preview_checked = false;
+    g_folder_mike_bound = false; g_folder_mike_fields = {}; g_folder_mike_owner = g_folder_mike_columns_site = 0;
+    hc_folder_mike_config = 0; hc_folder_mike_columns_original = nullptr;
+    __atomic_store_n(&hc_folder_mike_ready, 0u, __ATOMIC_RELEASE);
+    hc_folder_mike_original = nullptr; hc_folder_mike_continue = 0;
     g_folder_layout_bound = g_folder_layout_checked = false;
     g_folder_layout_attempted = false;
     g_folder_layout_retry_at_ms = 0; g_folder_layout_retry_failures = 0;
@@ -7384,6 +7469,62 @@ void prime_home_layout_first_render_locked() {
             have_config,__atomic_load_n(&hc_icon_render_enabled,__ATOMIC_ACQUIRE),knob.hook_armed,g_drawer_search_ready.load(std::memory_order_acquire),
             __atomic_load_n(&hc_folder_icon_scale_enabled,__ATOMIC_ACQUIRE),__atomic_load_n(&hc_widget_scale_enabled,__ATOMIC_ACQUIRE),
             __atomic_load_n(&hc_dart_columns_ready,__ATOMIC_ACQUIRE),__atomic_load_n(&hc_grid_autofit_ready,__ATOMIC_ACQUIRE));
+}
+
+// The loader's last synchronous window before Dart executes. Only the folder
+// pair is discovered here; no unrelated binder, symbol decoder or planner lock.
+void prime_home_folder_mike(HookFunction hook, UnhookFunction unhook) {
+    if (nhk::home_safe_mode::decision().blocked || !hook || g_folder_mike_bound) return;
+    if (g_loader_priming.test_and_set(std::memory_order_acquire)) {
+        __android_log_print(ANDROID_LOG_WARN, kTag,
+            "Pengeek folder startup window busy; keeping stock layout until process restart");
+        return;
+    }
+    struct Scope {
+        bool previous = home_layout_engine::InLoaderCallback();
+        Scope() { home_layout_engine::SetInLoaderCallback(true); g_folder_mike_startup_window = true; }
+        ~Scope() { g_folder_mike_startup_window = false; home_layout_engine::SetInLoaderCallback(previous);
+            g_loader_priming.clear(std::memory_order_release); }
+    } scope;
+    home_layout::Config config;
+    if (!home_layout::query_bootstrap_config(config) || !config.tweaks.folder_enabled
+        || config.tweaks.folder_cols < 4 || config.tweaks.folder_cols > 6 || !ensure_dart_library()) return;
+    const uint64_t length = g_dart->view_end - g_dart->view_begin;
+    if (!length || length > kMaxLauncherImageBytes) return;
+    std::ifstream input(g_dart->path, std::ios::binary);
+    std::vector<std::byte> image(static_cast<size_t>(length));
+    input.seekg(static_cast<std::streamoff>(g_dart->view_begin));
+    input.read(reinterpret_cast<char *>(image.data()), static_cast<std::streamsize>(image.size()));
+    if (input.gcount() != static_cast<std::streamsize>(image.size())) return;
+    auto code = home_layout::features::Code::parse(image);
+    if (!code) return;
+    unsigned producers = 0, getters = 0;
+    for (const auto &fn : code->functions()) {
+        home_layout::FolderMikeSite candidate; uint32_t offset = 0;
+        if (home_layout::folder_mike_site(fn.words, fn.va, candidate)) {
+            ++producers; g_folder_mike_owner = fn.va; g_folder_mike_fields = candidate;
+        }
+        if (home_layout::folder_mike_columns_site(fn.words, fn.va, offset)) {
+            ++getters; g_folder_mike_columns_site = fn.va + offset;
+        }
+    }
+    if (producers != 1 || getters != 1) {
+        __android_log_print(ANDROID_LOG_WARN, kTag,
+            "Pengeek folder pair skipped: producers=%u getters=%u; stock layout retained", producers, getters);
+        return;
+    }
+    g_hook_function = hook; g_unhook_function = unhook;
+    if (!bind_folder_mike()) return;
+    hc_folder_mike_config = home_layout::pack_folder_layout(config.folder, config.tweaks.folder_cols);
+    const std::vector<size_t> pair{kFolderMikeSlot, kFolderMikeColumnsSlot};
+    (void)nhk::ensure_slots_live(g_slots, slot_host(), pair);
+    const bool ready = nhk::slot_ready(g_slots[kFolderMikeSlot]) && nhk::slot_ready(g_slots[kFolderMikeColumnsSlot])
+        && hc_folder_mike_original && hc_folder_mike_columns_original;
+    // Both entries remain exact pass-through until this single release store.
+    __atomic_store_n(&hc_folder_mike_ready, uint32_t(ready), __ATOMIC_RELEASE);
+    __android_log_print(ANDROID_LOG_INFO, kTag,
+        "Pengeek folder pair ready=%d columns=%d fullWidth=%d; restart applies settings", ready,
+        config.tweaks.folder_cols, config.folder.full_width);
 }
 
 void prime_home_layout_first_render(HookFunction hook,UnhookFunction unhook) {

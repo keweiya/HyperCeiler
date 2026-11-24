@@ -24,7 +24,11 @@ namespace {
 // Phone, Pad and Fold grids also feed the Rust GridConfig/model. Do not create
 // a Dart/Rust disagreement while that first-use deadline remains unproven.
 // Keep their generated Dart plans as evidence but decline the composite grids.
-constexpr uint64_t kUnsupported = PhoneGridDart | PhoneGridRust | PadGrid | FoldGrid | RecentsAnimationRust;
+// The generated FolderColumns family contains the retired device-gate and
+// square patches. Never apply it alongside the Pengeek producer implementation.
+// The HYOS fixed-image executor has no producer journal yet, so reports this
+// feature as unsupported rather than silently restoring the previous behavior.
+constexpr uint64_t kUnsupported = PhoneGridDart | PhoneGridRust | PadGrid | FoldGrid | RecentsAnimationRust | FolderColumns;
 constexpr size_t kMaxWords = 64;
 constexpr size_t kHookCount = std::size(plan::kHooks);
 static_assert(kHookCount == 15);

@@ -2,9 +2,11 @@
 #include "ht_plan.h"
 #include "a64.h"
 #include "symtab.h"
+#include "../home_folder_mike_layout.h"
 
 #include <algorithm>
 #include <array>
+#include <elf.h>
 #include <utility>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -280,161 +282,88 @@ bool LocateFeature9(const CodeView& code, LocatedSites* out) {
     return true;
 }
 
-bool LocateFeature16Square(const CodeView& code, LocatedSites* out) {
-    constexpr const char* kFn = "FolderIconGetxController.folderIconSize";
-    constexpr const char* kCfgFn = "GridController.currentConfig";
+// Producer code may already carry our inline splice when a cached column plan
+// is revalidated. Resolve its original words from the inode-verified ELF view,
+// not the live mapping. Getter patch preimages remain checked against live code.
+bool ReadFolderProducerOriginal(const Image& image, uint32_t va,
+                                std::span<uint32_t> out) {
+    Elf64_Ehdr header{};
+    if (!ReadImageFile(image, 0, &header, sizeof(header)) ||
+        memcmp(header.e_ident, ELFMAG, SELFMAG) != 0 ||
+        header.e_ident[EI_CLASS] != ELFCLASS64 || header.e_ident[EI_DATA] != ELFDATA2LSB ||
+        header.e_machine != EM_AARCH64 || header.e_phentsize != sizeof(Elf64_Phdr) ||
+        header.e_phnum == 0 || header.e_phnum > 64) return false;
+    std::array<Elf64_Phdr, 64> headers{};
+    if (!ReadImageFile(image, header.e_phoff, headers.data(),
+                       size_t(header.e_phnum) * sizeof(Elf64_Phdr))) return false;
+    unsigned matches = 0;
+    uint64_t offset = 0;
+    for (size_t i = 0; i < header.e_phnum; ++i) {
+        const auto& p = headers[i];
+        if (p.p_type != PT_LOAD || !(p.p_flags & PF_X) || va < p.p_vaddr) continue;
+        const uint64_t delta = uint64_t(va) - p.p_vaddr;
+        if (delta > p.p_filesz || out.size_bytes() > p.p_filesz - delta ||
+            p.p_offset > UINT64_MAX - delta) continue;
+        offset = p.p_offset + delta;
+        ++matches;
+    }
+    return matches == 1 && ReadImageFile(image, offset, out.data(), out.size_bytes());
+}
 
-    uint32_t fn = 0, fnSize = 0, cfgFn = 0, cfgSize = 0;
-    char why[192] = {};
-    if (!LocateFunction(code, kFn, &fn, &fnSize, why, sizeof(why)) ||
-        !LocateFunction(code, kCfgFn, &cfgFn, &cfgSize, why, sizeof(why))) {
-        SetWhy(out->why16sq, sizeof(out->why16sq), "%s", why);
+// Pengeek layout policy: override only the public folder-column getter. Do not
+// rewrite the backing static field's inlined consumers: FolderConfigHandler must
+// retain the stock baseline while producing its cell geometry.
+bool LocateFeature16(const CodeView& code, LocatedSites* out) {
+    uint32_t owner = 0, size = 0;
+    if (!LocateFunction(code, "GridController.folderGridViewCol", &owner, &size,
+                        out->why16, sizeof(out->why16))) return false;
+    // Admit columns and producer as one geometry contract. A foreign producer
+    // must never receive just the column half of this replacement.
+    uint32_t producer = 0, producer_size = 0;
+    if (!LocateFunction(code, "FolderConfigHandler.handle", &producer, &producer_size,
+                        out->why16, sizeof(out->why16)) || producer_size != 217 * 4) return false;
+    std::array<uint32_t, 217> producer_body{};
+    home_layout::FolderMikeSite producer_site;
+    if (!ReadFolderProducerOriginal(code.image(), producer, producer_body) ||
+        !home_layout::folder_mike_site(producer_body, producer, producer_site)) return false;
+    if (size < 28 || size > 0x400) return false;
+    unsigned hits = 0;
+    uint32_t site = 0, original = 0;
+    for (uint32_t off = 0; off + 28 <= size; off += 4) {
+        uint32_t w[7]{};
+        if (!code.ReadWords(owner + off, w, 7)) return false;
+        // TST x2,#0x10; CSET x0,ne; SUB x0,x0,#1; AND x0,x0,#2;
+        // ADD x0,x0,#6; MOV dsp,fp; LDP fp,lr,[dsp],#16; RET.
+        if (w[0] != 0x9a9f07e0 || w[1] != 0xd1000400 || w[2] != 0x927f0000 ||
+            w[4] != 0xaa1d03ef || w[5] != 0xa8c179fd || w[6] != 0xd65f03c0) continue;
+        if (w[3] != 0x91001800 && !(a64::IsMovz(w[3]) && a64::MovzRd(w[3]) == 0 &&
+            a64::MovzImm(w[3]) >= 6 && a64::MovzImm(w[3]) <= 12 && !(a64::MovzImm(w[3]) & 1))) continue;
+        uint32_t test = 0;
+        if (off < 4 || !code.Word(owner + off - 4, &test) || test != 0xf27c005f) continue;
+        site = owner + off + 12; original = 0x91001800; ++hits;
+    }
+    if (hits != 1) {
+        SetWhy(out->why16, sizeof(out->why16), "文件夹列数 getter 唯一返回链不匹配 (%u)", hits);
         return false;
     }
-
-    uint32_t wideVa = 0, wideImm = 0, tallVa = 0, tallImm = 0;
-    int found = 0;
-    const uint32_t end = fn + fnSize;
-    for (uint32_t a = fn + 4; a + 4 <= end; a += 4) {
-        uint32_t w = 0, prev = 0;
-        if (!code.Word(a, &w) || !code.Word(a - 4, &prev)) break;
-        uint32_t rt = 0, rn = 0, imm = 0;
-        if (!a64::IsLdurD(w, &rt, &rn, &imm) || rt != 0u || rn != 0u) continue;
-        if (!a64::IsBl(prev)) continue;
-        uint32_t t = 0;
-        if (!a64::DecodeBranch(prev, a - 4, &t) || t != cfgFn) continue;
-        ++found;
-        if (found == 1) {
-            wideVa = a;
-            wideImm = imm;
-        } else {
-            tallVa = a;
-            tallImm = imm;
-            break;
-        }
-    }
-    if (found < 2 || wideVa == 0 || tallVa == 0) {
-        SetWhy(out->why16sq, sizeof(out->why16sq),
-               "%s 里找不到「bl currentConfig + ldur d0,[x0,#槽]」的宽度/高度基准对", kFn);
-        return false;
-    }
-    if (tallImm == wideImm) {
-        SetWhy(out->why16sq, sizeof(out->why16sq),
-               "%s 的宽高基准已经是同一个槽位（#%u），无需修正", kFn, wideImm);
-        return false;
-    }
-    uint32_t want = 0;
-    if (!a64::MakeLdurD(0, 0, wideImm, &want)) {
-        SetWhy(out->why16sq, sizeof(out->why16sq), "高度基准槽位 #%u 无法编码", wideImm);
-        return false;
-    }
-    out->squareFuncVa = fn;
-    out->squareSiteVa = tallVa;
-    out->squareCalleeVa = wideVa;
-    out->ok16sq = true;
-    out->why16sq[0] = '\0';
+    // Reuse serialized storage, with a distinct contract tag. Version 11 also
+    // invalidates previous whole-image consumer plans before they can be applied.
+    out->movzVa = owner; out->storeVa = site; out->movzRd = 0;
+    out->colsThreadLoad = 0x50474b31; // PGK1, not a thread-table instruction
+    out->colsOffset = 0; out->gateVa = 0;
+    out->colsReadCount = 1; out->colsReadVa[0] = site;
+    out->colsReadWord[0] = original;
+    out->ok16sq = false;
+    out->why16[0] = '\0'; out->ok16 = true;
     return true;
 }
 
-bool LocateFeature16(const CodeView& code, LocatedSites* out) {
-    constexpr int kGateBack = 28;
-
-    int hits = 0;
-    uint32_t movzVa = 0, movzRd = 0, storeVa = 0, colsOffset = 0;
-
-    uint32_t winVa = 0, winSize = 0;
-    if (SymbolIndex::Instance().Find("GridController.init", &winVa, &winSize) && winSize >= 16) {
-        const uint32_t windowEnd = winVa + winSize;
-        for (uint32_t a = winVa; a + 8 <= windowEnd; a += 4) {
-            uint32_t w = 0;
-            if (!code.Word(a, &w)) break;
-            if (!a64::IsMovz(w)) continue;
-            const uint32_t imm = a64::MovzImm(w);
-            if ((imm & 1u) != 0u || imm < 2u || imm > 32u) continue;
-            for (int j = 1; j <= 5; ++j) {
-                const uint32_t aa = a + static_cast<uint32_t>(j) * 4;
-                if (aa + 4 > windowEnd) break;
-                uint32_t w2 = 0;
-                if (!code.Word(aa, &w2)) break;
-                if ((w2 & 0xFFC00000u) != 0xF9000000u ||
-                    (w2 & 31u) != a64::MovzRd(w)) continue;
-                ++hits;
-                if (hits == 1) {
-                    movzVa = a;
-                    movzRd = a64::MovzRd(w);
-                    storeVa = aa;
-                    colsOffset = ((w2 >> 10) & 0xFFFu) * 8u;
-                }
-                break;
-            }
-            if (hits >= 2) break;
-        }
-        if (hits != 1) {
-            SetWhy(out->why16, sizeof(out->why16),
-                   "GridController.init 里「movz 列数 → str 字段」的形状有 %d 处（预期 1）",
-                   hits);
-            return false;
-        }
-    } else {
-        SetWhy(out->why16, sizeof(out->why16), "缺少 GridController.init 动态符号");
-        return false;
-    }
-
-    uint32_t gateVa = 0;
-    for (int j = 1; j <= kGateBack; ++j) {
-        const uint32_t a = storeVa - static_cast<uint32_t>(j) * 4;
-        uint32_t w = 0;
-        if (!code.Word(a, &w)) break;
-        if (!a64::IsBCond(w)) continue;
-        uint32_t t = 0;
-        if (!a64::DecodeBranch(w, a, &t)) continue;
-        if (t == storeVa + 4 || t == movzVa) {
-            gateVa = a;
-            break;
-        }
-    }
-
-    out->movzVa = movzVa;
-    out->movzRd = movzRd;
-    out->storeVa = storeVa;
-    out->gateVa = gateVa;
-    out->colsOffset = colsOffset;
-    // Resolve the static table through the initializer's own base-register load.
-    // Patching only its MOVZ races the first GridController.init. Every inlined
-    // consumer must use the requested Smi even after that field was initialized.
-    uint32_t table = 0, store = 0;
-    if (!code.Word(storeVa - 4, &table) || !code.Word(storeVa, &store) ||
-        (table & 0xffc003e0u) != (0xf9400000u | (26u << 5)) ||
-        (table & 31u) != ((store >> 5) & 31u)) {
-        SetWhy(out->why16, sizeof(out->why16), "列数静态表来源不匹配");
-        return false;
-    }
-    out->colsThreadLoad = table & ~31u;
-    out->colsReadCount = 0;
-    bool overflow = false;
-    uint32_t previous = 0, previousVa = 0;
-    const bool scanned = ForEachExecWord(code, [&](uint32_t va, uint32_t word) -> bool {
-        if (previousVa + 4 == va && (previous & ~31u) == out->colsThreadLoad &&
-            (word & 0xffc00000u) == 0xf9400000u &&
-            ((word >> 10) & 0xfffu) * 8u == colsOffset &&
-            ((word >> 5) & 31u) == (previous & 31u)) {
-            if (out->colsReadCount == 128) { overflow = true; return false; }
-            const uint32_t i = out->colsReadCount++;
-            out->colsReadVa[i] = va;
-            out->colsReadWord[i] = word;
-        }
-        previous = word; previousVa = va;
-        return true;
-    });
-    if (!scanned || overflow || out->colsReadCount == 0) {
-        SetWhy(out->why16, sizeof(out->why16), "列数消费者缺失或超出容量");
-        return false;
-    }
-    out->why16[0] = '\0';
-    out->ok16 = true;
-
-    LocateFeature16Square(code, out);
-    return true;
+bool ValidateMikeFolderColumns(const CodeView& code, const LocatedSites& s) {
+    LocatedSites fresh{};
+    return LocateFeature16(code, &fresh) && s.colsThreadLoad == fresh.colsThreadLoad &&
+        s.colsReadCount == 1 && !s.ok16sq && s.movzVa == fresh.movzVa &&
+        s.storeVa == fresh.storeVa && s.colsReadVa[0] == fresh.colsReadVa[0] &&
+        s.colsReadWord[0] == fresh.colsReadWord[0];
 }
 
 bool LocateFeature18(const CodeView& code, LocatedSites* out) {
@@ -1020,91 +949,19 @@ void DeriveFeature9(const CodeView& code, const LocatedSites& s, PlanResult* out
 
 void DeriveFeature16(const CodeView& code, const Config& cfg, const LocatedSites& s,
                      PlanResult* out) {
-    if (!s.ok16) {
-        memcpy(out->why16, s.why16, sizeof(out->why16));
+    if (!s.ok16 || !ValidateMikeFolderColumns(code, s)) {
+        SetWhy(out->why16, sizeof(out->why16), "米客文件夹列数 getter 契约未通过");
         return;
     }
-    /*
-     * An unset count means nobody asked for this: leaving the launcher's own folder width alone is
-     * the only correct answer, and it is also what keeps a value-less source (an older config file,
-     * a Config nobody filled in) from writing a compiled default onto the desktop.
-     */
-    if (cfg.folderCols == kColsUnset) {
-        SetWhy(out->why16, sizeof(out->why16), "每行应用数未设置：不改动文件夹列数");
-        return;
-    }
-    const size_t mark = out->patches.size();
-
-    const uint32_t cols = cfg.folderCols;
-    const uint32_t wantSmi = cols * 2;
-    // Leave the initializer and device gate untouched: restoring the default
-    // must reveal the original device value, never a previously modified field.
-    if (s.colsReadCount == 0 || s.colsReadCount > 128) {
-        Rollback(out, mark);
-        SetWhy(out->why16, sizeof(out->why16), "列数消费者未解析");
-        return;
-    }
-    for (uint32_t i = 0; i < s.colsReadCount; ++i) {
-        uint32_t read = 0, table = 0, replacement = 0;
-        const uint32_t original = s.colsReadWord[i];
-        if (!code.Word(s.colsReadVa[i], &read) ||
-            !code.Word(s.colsReadVa[i] - 4, &table) ||
-            (table & ~31u) != s.colsThreadLoad ||
-            (table & 31u) != ((original >> 5) & 31u) ||
-            !a64::MakeMovz(original & 31u, wantSmi, &replacement) ||
-            (read != original && (!a64::IsMovz(read) ||
-             a64::MovzRd(read) != (original & 31u) ||
-             a64::MovzImm(read) < 2 || a64::MovzImm(read) > 32 ||
-             (a64::MovzImm(read) & 1u)))) {
-            Rollback(out, mark);
-            SetWhy(out->why16, sizeof(out->why16), "列数消费者原指令发生变化");
-            return;
-        }
-        if (read != replacement) out->patches.push_back({s.colsReadVa[i], read,
-            replacement, "文件夹列数：动态静态字段消费者使用用户设定值"});
-    }
-
-    if (cols != kFolderColsOfficial) {
-        /*
-         * 7695 排查结论：关闭动画的图标错位与正方形修正无关（禁用它后错位依旧）——
-         * 原始动画源坐标使用未约束格宽；home_layout_hooks 的三槽 bank 现在以实际 SliverGrid
-         * 的标量快照修正源坐标，保持 Dart 分配/GC 返回点，不再作为已知限制。
-         * 修正恢复启用：它的价值（图标框不纵向拉伸）不受该限制影响。
-         */
-        if (!s.ok16sq || s.squareSiteVa == 0 || s.squareCalleeVa == 0) {
-            if (s.why16sq[0] != '\0') {
-                memcpy(out->why16sq, s.why16sq, sizeof(out->why16sq));
-            } else {
-                SetWhy(out->why16sq, sizeof(out->why16sq),
-                       "找不到「文件夹图标高度基准」（可选修正，不影响功能 16 本身）");
-            }
-        } else {
-            uint32_t tall = 0, wide = 0;
-            uint32_t rt = 0, rn = 0, tallImm = 0, wideImm = 0;
-            const char* kWhat =
-                    "文件夹图标：高度改用宽度基准（图标框保持正方形，不再被纵向拉伸）";
-            if (!code.Word(s.squareSiteVa, &tall) || !code.Word(s.squareCalleeVa, &wide) ||
-                !a64::IsLdurD(tall, &rt, &rn, &tallImm) ||
-                !a64::IsLdurD(wide, nullptr, nullptr, &wideImm)) {
-                SetWhy(out->why16sq, sizeof(out->why16sq),
-                       "图标正方形修正：落点 %#x / %#x 形状对不上", s.squareSiteVa,
-                       s.squareCalleeVa);
-            } else {
-                uint32_t want = 0;
-                if (!a64::MakeLdurD(rt, rn, wideImm, &want)) {
-                    SetWhy(out->why16sq, sizeof(out->why16sq),
-                           "图标正方形修正：槽位 #%u 编码失败", wideImm);
-                } else {
-                    if (tall != want) {
-                        out->patches.push_back({s.squareSiteVa, tall, want, kWhat});
-                    }
-                    out->ok16sq = true;
-                    out->why16sq[0] = '\0';
-                }
-            }
-        }
-    }
-
+    if (cfg.folderCols == kColsUnset) return;
+    if (cfg.folderCols < 3 || cfg.folderCols > 6) return;
+    uint32_t current = 0, replacement = 0;
+    if (!code.Word(s.colsReadVa[0], &current)) return;
+    // Default means the ORIGINAL device-dependent ADD, not a forced three.
+    replacement = s.colsReadWord[0];
+    if (cfg.folderCols != 3 && !a64::MakeMovz(0, cfg.folderCols * 2, &replacement)) return;
+    if (current != replacement) out->patches.push_back({s.colsReadVa[0], current,
+        replacement, "米客文件夹列数：只改 getter，保留原生配置与动画消费者"});
     out->ok16 = true;
 }
 
@@ -1461,7 +1318,7 @@ struct ByteReader {
     }
 };
 
-constexpr uint32_t kSitesPayloadVersion = 10;
+constexpr uint32_t kSitesPayloadVersion = 11;
 
 }
 
@@ -1488,8 +1345,6 @@ void LocateSites(const CodeView& code, const Config& want, LocatedSites* out) {
     }
     if ((mask & kWantFolderCols) && !out->ok16) {
         LocateFeature16(code, out);
-    } else if ((mask & kWantFolderCols) && !out->ok16sq) {
-        LocateFeature16Square(code, out);
     }
     if ((mask & kWantHideClear) && !out->ok18) {
         LocateFeature18(code, out);
@@ -1527,55 +1382,8 @@ bool ValidateSitesImpl(const CodeView& code, LocatedSites& s) {
             }
         }
     }
-    if (s.ok16) {
-        if (s.colsReadCount == 0 || s.colsReadCount > 128 ||
-            (s.colsThreadLoad & 0xffc003ffu) != (0xf9400000u | (26u << 5))) return false;
-        for (uint32_t i = 0; i < s.colsReadCount; ++i) {
-            uint32_t table = 0, read = 0;
-            const uint32_t original = s.colsReadWord[i];
-            if ((original & 0xffc00000u) != 0xf9400000u ||
-                ((original >> 10) & 0xfffu) * 8u != s.colsOffset ||
-                !code.Word(s.colsReadVa[i] - 4, &table) ||
-                (table & ~31u) != s.colsThreadLoad ||
-                (table & 31u) != ((original >> 5) & 31u) ||
-                !code.Word(s.colsReadVa[i], &read) ||
-                (read != original && (!a64::IsMovz(read) ||
-                 a64::MovzRd(read) != (original & 31u) ||
-                 a64::MovzImm(read) < 2 || a64::MovzImm(read) > 32 ||
-                 (a64::MovzImm(read) & 1u)))) return false;
-        }
+    if (s.ok16 && !ValidateMikeFolderColumns(code, s)) return false;
 
-        uint32_t mw = 0, sw = 0;
-        if (!code.Word(s.movzVa, &mw) || !code.Word(s.storeVa, &sw)) return false;
-        if (!a64::IsMovz(mw) || a64::MovzRd(mw) != s.movzRd) return false;
-        const uint32_t imm = a64::MovzImm(mw);
-        if (imm != kFolderColsOrigSmi) {
-            if (imm < 2u || imm > 32u || (imm & 1u) != 0u) return false;
-        }
-        if (!s.colsOffset || !a64::IsStrXUimm(sw, s.colsOffset))
-            return false;
-        if (s.storeVa <= s.movzVa || s.storeVa - s.movzVa > 20u) return false;
-
-        if (s.ok16sq) {
-            uint32_t tallW = 0, wideW = 0;
-            uint32_t rt = 0, rn = 0, tallImm = 0, wideImm = 0;
-            const bool shaped =
-                    s.squareFuncVa != 0 && s.squareSiteVa != 0 && s.squareCalleeVa != 0 &&
-                    s.squareCalleeVa != s.squareSiteVa &&
-                    s.squareSiteVa > s.squareFuncVa &&
-                    s.squareCalleeVa > s.squareFuncVa &&
-                    s.squareSiteVa - s.squareFuncVa < 0x800u &&
-                    s.squareCalleeVa - s.squareFuncVa < 0x800u &&
-                    code.Word(s.squareSiteVa, &tallW) && code.Word(s.squareCalleeVa, &wideW) &&
-                    a64::IsLdurD(tallW, &rt, &rn, &tallImm) &&
-                    a64::IsLdurD(wideW, nullptr, nullptr, &wideImm) && tallImm != wideImm;
-            if (!shaped) {
-                s.ok16sq = false;
-                SetWhy(s.why16sq, sizeof(s.why16sq),
-                       "站点里的「图标正方形」落点校验不通过（已跳过该修正）");
-            }
-        }
-    }
     if (s.ok18) {
         const uint32_t svEnd = s.svVa + 0x800;
         if (s.bneAt < s.svVa || s.bneAt >= svEnd) return false;
@@ -1703,46 +1511,7 @@ bool ValidateSites(const CodeView& code, LocatedSites& s) {    if (!s.AnyOk()) r
         if (!a64::IsStpFpLrPre(p0) || !a64::IsMovX29X15(p1)) return false;
     }
 
-    if (s.ok16) {
-        if (s.colsReadCount == 0 || s.colsReadCount > 128 ||
-            (s.colsThreadLoad & 0xffc003ffu) != (0xf9400000u | (26u << 5))) return false;
-        for (uint32_t i = 0; i < s.colsReadCount; ++i) {
-            uint32_t table = 0, read = 0;
-            const uint32_t original = s.colsReadWord[i];
-            if ((original & 0xffc00000u) != 0xf9400000u ||
-                ((original >> 10) & 0xfffu) * 8u != s.colsOffset ||
-                !code.Word(s.colsReadVa[i] - 4, &table) ||
-                (table & ~31u) != s.colsThreadLoad ||
-                (table & 31u) != ((original >> 5) & 31u) ||
-                !code.Word(s.colsReadVa[i], &read) ||
-                (read != original && (!a64::IsMovz(read) ||
-                 a64::MovzRd(read) != (original & 31u) ||
-                 a64::MovzImm(read) < 2 || a64::MovzImm(read) > 32 ||
-                 (a64::MovzImm(read) & 1u)))) return false;
-        }
-
-        uint32_t mw = 0, sw = 0;
-        if (!code.Word(s.movzVa, &mw) || !code.Word(s.storeVa, &sw)) return false;
-        if (!a64::IsMovz(mw) || a64::MovzRd(mw) != s.movzRd) return false;
-        const uint32_t imm = a64::MovzImm(mw);
-        if (imm != kFolderColsOrigSmi) {
-            if (imm < 2u || imm > 32u || (imm & 1u) != 0u) return false;
-        }
-        if (!s.colsOffset || !a64::IsStrXUimm(sw, s.colsOffset))
-            return false;
-        if (s.storeVa <= s.movzVa || s.storeVa - s.movzVa > 20u) return false;
-        if (s.gateVa != 0) {
-            uint32_t gw = 0;
-            if (!code.Word(s.gateVa, &gw)) return false;
-            if (gw != a64::kNop) {
-                uint32_t t = 0;
-                if (!a64::IsBCond(gw) || !a64::DecodeBranch(gw, s.gateVa, &t) ||
-                    t != s.storeVa + 4) {
-                    return false;
-                }
-            }
-        }
-    }
+    if (s.ok16 && !ValidateMikeFolderColumns(code, s)) return false;
 
     if (s.ok18) {
         const FunctionSignature* sv = FindSignatureByName("_syncVisibility");
