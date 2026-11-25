@@ -237,7 +237,9 @@ struct FeatureSlot {
 
 constexpr FeatureSlot kFeatureSlots[] = {
         {kFeatureNoClear, kWantNoClear, "去掉最近任务清理键"},
-        {kFeatureFolderCols, kWantFolderCols, "文件夹每行应用数"},
+        // Folder columns are handled by the HyperFolder Dart AOT patch
+        // (NativeHomeHooksOS4.applyFolderLayout); the byte-plan path here would patch the
+        // same accessor a second time and fight it, so the slot is retired.
         {kFeatureHideClear, kWantHideClear, "仅隐藏最近任务清理键"},
         {kFeaturePadGrid, kWantPadGrid, "平板桌面网格"},
         {kFeaturePhoneGrid, kWantPhoneGrid, "手机桌面行列"},

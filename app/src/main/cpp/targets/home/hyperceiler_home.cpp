@@ -545,3 +545,23 @@ jint JNI_OnLoad(JavaVM *vm, void *) {
         nhk::native_log::attach_java_bridge(vm, env);
     return JNI_VERSION_1_6;
 }
+
+/*
+ * HyperFolder: folder layout patches (columns / panel width / title centring).
+ *
+ * The HyperOS 4 launcher has no dex, so these knobs are applied to the Dart AOT image
+ * instead. The implementation lives in targets/home/hyperfolder_patch.cpp; this entry
+ * only forwards the preferences the settings page collected.
+ */
+extern "C" void hpf_apply(int cols, int width, int title_center);
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_sevtinge_hyperceiler_libhook_rules_home_other_NativeHomeHooksOS4_nativeApplyFolder(
+    JNIEnv *, jobject, jint cols, jint width, jint title_center) {
+    if (native_installation_blocked()) return native_status();
+    if (is_launcher_process()) {
+        hpf_apply(static_cast<int>(cols), static_cast<int>(width),
+                  static_cast<int>(title_center));
+    }
+    return native_status();
+}

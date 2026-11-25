@@ -135,6 +135,26 @@ object NativeHomeHooksOS4 {
     }
 
     /**
+     * HyperFolder: push the folder layout preferences into the Dart AOT patch.
+     *
+     * Reads the same keys the launcher settings page already exposes:
+     * `home_folder_columns` (3..6), `home_folder_width` (switch),
+     * `home_folder_title_pos` (0 left / 1 centre / 2 right).
+     */
+    fun applyFolderLayout() {
+        runCatching {
+            val cols = PrefsBridge.getInt("home_folder_columns", 3)
+            val width = if (PrefsBridge.getBoolean("home_folder_width")) 1 else 0
+            val titleCenter =
+                if (PrefsBridge.getStringAsInt("home_folder_title_pos", 0) == 1) 1 else 0
+            val rc = nativeApplyFolder(cols, width, titleCenter)
+            stage("folder layout cols=$cols width=$width titleCenter=$titleCenter rc=${hex(rc)}")
+        }.onFailure {
+            stage("folder layout failed detail=${it.javaClass.simpleName}: ${describe(it)}")
+        }
+    }
+
+    /**
      * Module-entry probe. Called from `XposedInitEntry` as soon as the framework hands over the
      * launcher process, before rule matching, crash safe mode and per-package preference gates.
      * Being independent of those gates is the point: if any of them refuses to load `HomePhone`,
@@ -210,6 +230,7 @@ object NativeHomeHooksOS4 {
                     prefBoolean("home_dock_bg_custom_enable") && prefStringInt("home_dock_add_blur") == 1
                 )
                 stage("configure done status=${hex(initialStatus)}${describeStatus(initialStatus)}")
+                applyFolderLayout()
                 // The Dock preference is what decides whether the launcher pays for the native
                 // motion pipeline at all; push it before anything else can start following.
                 val dockStatus = syncDockEnabled()
@@ -433,6 +454,11 @@ object NativeHomeHooksOS4 {
 
     private fun prefBoolean(key: String): Boolean =
         runCatching { PrefsBridge.getBoolean(key) }.getOrDefault(false)
+
+    private fun prefStringInt(key: String): Int =
+        runCatching { PrefsBridge.getStringAsInt(key, 0) }.getOrDefault(0)
+}
+etOrDefault(false)
 
     private fun prefStringInt(key: String): Int =
         runCatching { PrefsBridge.getStringAsInt(key, 0) }.getOrDefault(0)
