@@ -42,12 +42,11 @@ struct PhdrInfo {
 uint64_t g_base = 0;
 char g_name[192] = {0};
 
-int phdr_cb(void* info, unsigned long, void*) {
-    auto* p = static_cast<PhdrInfo*>(info);
-    if (p->name == nullptr || p->name[0] == '\0') return 0;
-    if (std::strstr(p->name, "libapp.so") == nullptr) return 0;
-    g_base = p->addr;
-    std::strncpy(g_name, p->name, sizeof(g_name) - 1);
+int phdr_cb(dl_phdr_info* info, size_t, void*) {
+    if (info->dlpi_name == nullptr || info->dlpi_name[0] == '\0') return 0;
+    if (std::strstr(info->dlpi_name, "libapp.so") == nullptr) return 0;
+    g_base = info->dlpi_addr;
+    std::strncpy(g_name, info->dlpi_name, sizeof(g_name) - 1);
     return 1;
 }
 
