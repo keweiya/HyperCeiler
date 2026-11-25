@@ -146,12 +146,19 @@ object NativeHomeHooksOS4 {
      */
     fun applyFolderLayout() {
         runCatching {
-            val cols = PrefsBridge.getInt("home_folder_columns", 3)
+            // Columns are deliberately left to the byte-plan feature (kFeatureFolderCols):
+            // it patches every column consumer and the square-icon height correction, so the
+            // folder height follows the row count. Patching only GridController.folderGridViewCol
+            // (what this AOT patch does) leaves the panel height at the old row count and the
+            // last row gets clipped. Keep this path for width / title only.
+            val cols = 0
             val width = if (PrefsBridge.getBoolean("home_folder_width")) 1 else 0
             val titleCenter =
                 if (PrefsBridge.getStringAsInt("home_folder_title_pos", 0) == 1) 1 else 0
-            val rc = nativeApplyFolder(cols, width, titleCenter)
-            stage("folder layout cols=$cols width=$width titleCenter=$titleCenter rc=${hex(rc)}")
+            if (width != 0 || titleCenter != 0) {
+                val rc = nativeApplyFolder(cols, width, titleCenter)
+                stage("folder layout cols=$cols width=$width titleCenter=$titleCenter rc=${hex(rc)}")
+            }
         }.onFailure {
             stage("folder layout failed detail=${it.javaClass.simpleName}: ${describe(it)}")
         }
