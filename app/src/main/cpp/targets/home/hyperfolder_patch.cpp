@@ -16,6 +16,7 @@
  */
 #include <android/log.h>
 #include <dlfcn.h>
+#include <link.h>
 #include <sys/mman.h>
 
 #include <cstdint>
