@@ -139,21 +139,11 @@ class MobilePublicHookV : BaseHook() {
         val isVisible = createVisibilityFlow()
 
         when {
-            // 信号显示逻辑
-            signalShowMode >= 1 -> {
+            // 信号显示逻辑 / 双排信号：统一交给 refreshVisibility 计算，两者可叠加
+            signalShowMode >= 1 || dualRowEnabled() -> {
                 cellularIcon.setObjectField("isVisible", isVisible)
                 trackVisibilityFlow(subId, isVisible)
                 refreshVisibility(subId, isVisible)
-                registerReceiver(EzXposed.appContext)
-            }
-            // 双排信号（signalShowMode == 0 且未隐藏卡）
-            isEnableDouble && !(card1 || card2) -> {
-                cellularIcon.setObjectField("isVisible", isVisible)
-                trackVisibilityFlow(subId, isVisible)
-                val slotIndex = SubscriptionManager.getSlotIndex(subId)
-                val shouldShow = !MobileViewHelper.isAirplaneModeOn() &&
-                    (MobileViewHelper.isSingleSimMode() || slotIndex == 0)
-                updateVisibility(isVisible, shouldShow)
                 registerReceiver(EzXposed.appContext)
             }
             // 隐藏指定卡
@@ -322,7 +312,22 @@ class MobilePublicHookV : BaseHook() {
             3 -> !isAirplane && subId == defaultDataSubId
             else -> !isAirplane && (MobileViewHelper.isSingleSimMode() || slotIndex == 0)
         }
-        updateVisibility(isVisible, shouldShow)
+        updateVisibility(isVisible, shouldShow && !dualRowHidesSlot(subId))
+    }
+
+    /** 双排信号开关已打开且没有隐藏单卡时，两张卡都由 slot 0 的视图渲染。 */
+    private fun dualRowEnabled(): Boolean {
+        return isEnableDouble && !(card1 || card2)
+    }
+
+    /**
+     * 双排只绘制 slot 0 的 root（DualRowSignalHookV 自己建的两排列也在它下面），
+     * slot 1+ 的 root 必须一直隐藏，否则会叠出第二套双排图标。
+     * 与「非 WiFi 下始终显示」叠加时，slot 0 仍按 signalShowMode 正常隐藏。
+     */
+    private fun dualRowHidesSlot(subId: Int): Boolean {
+        if (!dualRowEnabled() || MobileViewHelper.isSingleSimMode()) return false
+        return SubscriptionManager.getSlotIndex(subId) > 0
     }
 
     @RequiresPermission(allOf = [Manifest.permission.ACCESS_NETWORK_STATE, Manifest.permission.READ_PHONE_STATE])
@@ -342,7 +347,7 @@ class MobilePublicHookV : BaseHook() {
             } else {
                 !isAirplane && (isSingleSim || SubscriptionManager.getSlotIndex(subId) == 0)
             }
-            updateVisibility(isVisible, shouldShow)
+            updateVisibility(isVisible, shouldShow && !dualRowHidesSlot(subId))
         }
     }
 

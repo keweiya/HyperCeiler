@@ -286,8 +286,10 @@ public class SystemUIB extends BaseLoad {
         initHook(SwapWiFiAndMobileNetwork.INSTANCE, PrefsBridge.getBoolean("system_ui_status_bar_swap_wifi_and_mobile_network"));
         // 移动网络图标
         boolean isEnabledDualRowSignal = PrefsBridge.getBoolean("system_ui_statusbar_network_icon_enable");
+        // 双排只在「非 WiFi 下始终显示」(1) 时仍可加载，与信号显示逻辑叠加；
+        // 2/3 是「仅状态栏显示 / 仅显示数据卡」，与双排互斥。
         initHook(new DualRowSignalHookV(), isEnabledDualRowSignal && !(
-                PrefsBridge.getStringAsInt("system_ui_status_bar_icon_mobile_network_signal_mode", 0) != 0 ||
+                PrefsBridge.getStringAsInt("system_ui_status_bar_icon_mobile_network_signal_mode", 0) >= 2 ||
                 PrefsBridge.getBoolean("system_ui_status_bar_icon_mobile_network_hide_card_1") ||
                 PrefsBridge.getBoolean("system_ui_status_bar_icon_mobile_network_hide_card_2")
             )

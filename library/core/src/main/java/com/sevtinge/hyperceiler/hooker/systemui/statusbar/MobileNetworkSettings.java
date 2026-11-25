@@ -102,7 +102,9 @@ public class MobileNetworkSettings extends DashboardFragment {
             mHideCard1.setSummary("");
             mHideCard2.setEnabled(true);
             mHideCard2.setSummary("");
-            if (signalMode == 1 || card1Checked || card2Checked) {
+            // 双排信号与「非 WiFi 下始终显示」(signalMode 1) 可叠加，不再为此禁用双排；
+            // 只有「隐藏 SIM 卡图标」仍与双排互斥（双排必须为两张卡各渲染一排）。
+            if (card1Checked || card2Checked) {
                 mDoubleMobile.setEnabled(false);
                 mDoubleMobile.setSummary(R.string.system_ui_statusbar_iconmanage_nosupport_mobile_network);
             } else {
