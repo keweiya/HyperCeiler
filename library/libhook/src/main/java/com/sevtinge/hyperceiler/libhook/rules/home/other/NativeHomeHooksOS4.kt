@@ -151,8 +151,10 @@ object NativeHomeHooksOS4 {
             // folder height follows the row count. Patching only GridController.folderGridViewCol
             // (what this AOT patch does) leaves the panel height at the old row count and the
             // last row gets clipped. Keep this path for width / title only.
-            val cols = 0
-            val width = if (PrefsBridge.getBoolean("home_folder_width")) 1 else 0
+            val cols = PrefsBridge.getInt("home_folder_columns", 4)
+            // The width knob is disabled in this build: widening the panel does not widen
+            // the grid viewport, and the last folder row gets clipped.
+            val width = 0
             val titleCenter =
                 if (PrefsBridge.getStringAsInt("home_folder_title_pos", 0) == 1) 1 else 0
             if (width != 0 || titleCenter != 0) {

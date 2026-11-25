@@ -2,17 +2,17 @@
 /*
  * HyperFolder: folder layout patches for the HyperOS 4 Flutter launcher.
  *
- * The launcher shipped with HyperOS 4 has no dex: the desktop UI is Dart AOT code inside
- * libapp.so. These three knobs therefore cannot be implemented with Java hooks; they are
- * done by rewriting the return value of the Dart accessors that feed the folder layout.
+ * Columns and panel height come from two different places in the Dart code:
+ *   GridController.folderGridViewCol        -> icons per folder row (Smi)
+ *   FolderGridViewGetxController.calGridHeight -> grid viewport height (double)
+ *   FolderClingWidget.getFolderClingWidth   -> opened folder panel width
  *
- *   GridController.folderGridViewCol          -> number of icons per folder row (Smi)
- *   FolderClingWidget.getFolderClingWidth     -> width of the opened folder panel
- *   FolderHeaderWidget (title placement)      -> not implemented in this build
- *
- * Every site is validated against the image before it is touched: the .text marker at
- * 0x850000 of RELEASE-8.11.02.7755 must match, otherwise nothing is patched and the
- * failure is reported instead of corrupting an unknown build.
+ * Patching only the column accessor leaves calGridHeight computing the viewport for the
+ * previous row count, which is exactly the "last row clipped" symptom: the panel is tall
+ * enough but the grid viewport is short. Widening the panel has the same effect on the
+ * opposite axis. Until both producers are patched together, only the width of the grid
+ * cells (what the columns accessor already changes) is touched and the panel keeps the
+ * launcher's own height.
  */
 #include <android/log.h>
 #include <dlfcn.h>
@@ -28,16 +28,8 @@ constexpr char kTag[] = "HyperCeilerHyperFolder";
 
 /* Offsets of RELEASE-8.11.02.7755 (versionCode 811027755). */
 constexpr uint64_t kFolderColsOff = 0x8e6e7c;   /* GridController.folderGridViewCol */
-constexpr uint64_t kClingWidthOff = 0x8e6f3c;   /* FolderClingWidget.getFolderClingWidth */
 constexpr uint64_t kTextVerifyOff = 0x850000;   /* .text start marker */
 constexpr uint32_t kTextMarker = 0x00016940u;
-
-struct PhdrInfo {
-    uint64_t addr;
-    const char* name;
-    const void* phdr;
-    uint16_t phnum;
-};
 
 uint64_t g_base = 0;
 char g_name[192] = {0};
@@ -94,7 +86,12 @@ bool patch_words(uint64_t addr, const uint32_t* words, int count, const char* wh
 }  // namespace
 
 extern "C" void hpf_apply(int cols, int width, int title_center) {
-    if (cols <= 0 && width == 0 && title_center == 0) {
+    /* The width knob is disabled: widening the panel does not widen the grid viewport,
+     * which shows up as the last row being clipped. Kept as a parameter so the settings
+     * page keeps its state, but it no longer patches anything. */
+    (void)width;
+
+    if (cols <= 0 && title_center == 0) {
         __android_log_print(ANDROID_LOG_INFO, kTag, "everything disabled, skip");
         return;
     }
@@ -126,15 +123,6 @@ extern "C" void hpf_apply(int cols, int width, int title_center) {
         patch_words(g_base + kFolderColsOff, insns, 2, "folderColumns");
     } else {
         __android_log_print(ANDROID_LOG_INFO, kTag, "folderColumns: disabled");
-    }
-
-    if (width != 0) {
-        /* b <deviceScreenWidth branch at 0x8e7118> */
-        const int64_t delta = static_cast<int64_t>(0x8e7118ULL - kClingWidthOff);
-        const uint32_t insn = 0x14000000u | (static_cast<uint32_t>(delta >> 2) & 0x03FFFFFFu);
-        patch_words(g_base + kClingWidthOff, &insn, 1, "clingWidth");
-    } else {
-        __android_log_print(ANDROID_LOG_INFO, kTag, "clingWidth: disabled");
     }
 
     if (title_center != 0) {

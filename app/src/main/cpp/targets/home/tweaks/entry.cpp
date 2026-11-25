@@ -237,7 +237,8 @@ struct FeatureSlot {
 
 constexpr FeatureSlot kFeatureSlots[] = {
         {kFeatureNoClear, kWantNoClear, "去掉最近任务清理键"},
-        {kFeatureFolderCols, kWantFolderCols, "文件夹每行应用数"},
+        // Folder layout is owned by the HyperFolder Dart AOT patch; the byte-plan folder
+        // feature (and the folder open/close animation work it carries) is retired here.
         {kFeatureHideClear, kWantHideClear, "仅隐藏最近任务清理键"},
         {kFeaturePadGrid, kWantPadGrid, "平板桌面网格"},
         {kFeaturePhoneGrid, kWantPhoneGrid, "手机桌面行列"},
