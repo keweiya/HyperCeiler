@@ -3893,7 +3893,7 @@ bool g_dock_title_generation_valid = false;
 bool g_dock_title_model_bound=false;
 std::atomic_bool g_dock_title_patches_ready{false};
 bool g_dock_title_reported = false, g_dock_title_request = false, g_dock_title_result = false;
-std::array<nhk::SourceWordPatch,2> g_auto_close_words{};
+std::array<nhk::SourceWordPatch,3> g_auto_close_words{};
 std::atomic_flag g_auto_close_busy = ATOMIC_FLAG_INIT;
 bool g_auto_close_generation_valid = false;
 bool g_auto_close_reported = false, g_auto_close_request = false, g_auto_close_result = false;
@@ -4139,38 +4139,44 @@ bool sync_folder_auto_close(bool enabled) {
     struct Release { ~Release() { g_auto_close_busy.clear(std::memory_order_release); } } release;
     if (!g_dart || (!enabled && !g_auto_close_words[0].address)) return !enabled;
     if (!g_auto_close_words[0].address) {
-        uint32_t va=0,span=0,close=0,rx=0,registered=0,size=0,animate=0,immediate=0,scroll=0;
+        uint32_t va=0,span=0,close=0,rx=0,registered=0,size=0,scroll=0,scroll_span=0;
         std::vector<uint32_t> body,close_body;
         if (home_layout_engine::HomeLayoutEngineFindSymbol(home_layout::kFolderAutoClickSymbol,&va,&size)
             && home_layout_engine::HomeLayoutEngineFindSymbol("FolderClingGetxController.handleFolderClingClose",&close,&size)
             && home_layout_engine::HomeLayoutEngineFindSymbol("RxObjectMixin.value",&rx,&size)
             && home_layout_engine::HomeLayoutEngineFindSymbol("Inst|isRegistered",&registered,&size)
-            && home_layout_engine::HomeLayoutEngineFindSymbol("FolderClingGetxController._shouldCloseWithAnimation",&animate,&size)
-            && home_layout_engine::HomeLayoutEngineFindSymbol("FolderClingGetxController.handleFolderClingCloseImmediately",&immediate,&size)
             && home_layout_engine::HomeLayoutEngineFindSymbol("FolderGridViewGetxController.scrollNearestRow",&scroll,&size)
             && dartscan::function_span(va,&span) && dart_function_words(va,span,body)
-            && dartscan::body(close,close_body)) {
-            const auto offsets=home_layout::resolve_folder_auto_close_immediate(body,va,close,rx,registered,
-                close_body,animate,immediate,scroll);
-            std::array<nhk::SourceWordPatch,2> prepared{};
-            bool compatible=offsets.has_value();
+            && dartscan::function_span(close,&scroll_span) && dart_function_words(close,scroll_span,close_body)) {
+            const auto plan=home_layout::resolve_folder_auto_close(body,va,close,rx,registered,close_body,scroll);
+            std::array<nhk::SourceWordPatch,3> prepared{};
+            bool compatible=plan.has_value();
+            const uint32_t sites[3]={plan?plan->mode_gate:0,plan?plan->open_gate:0,plan?plan->scroll_gate:0};
+            const uint32_t words[3]={home_layout::kFolderAutoCloseReplacement,
+                home_layout::kFolderAutoCloseReplacement,plan?plan->scroll_branch:0};
+            const uint32_t owner[3]={va,va,close};
+            const std::vector<uint32_t>* owner_body[3]={&body,&body,&close_body};
             for(size_t i=0;compatible && i<prepared.size();++i) {
-                const size_t offset=(*offsets)[i];
-                if(offset>UINT32_MAX-va || g_dart->load_base>UINTPTR_MAX-va-offset) {compatible=false;break;}
-                const uint32_t site=va+uint32_t(offset);
+                const uint32_t base=owner[i], offset=sites[i];
+                if(offset>UINT32_MAX-base || g_dart->load_base>UINTPTR_MAX-base-offset) {compatible=false;break;}
+                const uint32_t site=base+offset;
                 const uintptr_t address=g_dart->load_base+site;
                 const auto file=dart_file_offset(site,4);
                 const auto source=nhk::source_at(g_dart->owned,address,4);
+                // The word we replace must be the one the plan decoded, byte for byte.
                 if(!file || !source || nhk::add_overflows(g_dart->view_begin,*file)
-                    || source->file_offset!=g_dart->view_begin+*file || (address&3)) {compatible=false;break;}
-                prepared[i]={address,body[offset/4],i==0 ? home_layout::kFolderAutoCloseReplacement
-                    : home_layout::kFolderAutoCloseImmediate,*source};
+                    || source->file_offset!=g_dart->view_begin+*file || (address&3)
+                    || offset/4>=(*owner_body[i]).size()
+                    || (*owner_body[i])[offset/4]==words[i]) {compatible=false;break;}
+                prepared[i]={address,(*owner_body[i])[offset/4],words[i],*source};
             }
             if(compatible) {
                 g_auto_close_words=prepared;g_auto_close_generation_valid=true;
                 __android_log_print(ANDROID_LOG_INFO,kTag,
-                    "folder auto-close dynamic gate=%#x animation-arg=%#x immediate=1 sites=2",
-                    va+uint32_t((*offsets)[0]),va+uint32_t((*offsets)[1]));
+                    "folder auto-close HomeTweaks plan mode=%#x open=%#x scroll=%#x target=%#x animated-close=stock",
+                    va+plan->mode_gate,va+plan->open_gate,close+plan->scroll_gate,
+                    uint32_t(int64_t(close)+int64_t(plan->scroll_gate)
+                        +int64_t(int32_t(plan->scroll_branch<<6)>>6)*4));
             }
         }
     }
@@ -4190,7 +4196,7 @@ bool sync_folder_auto_close(bool enabled) {
     if(!g_auto_close_reported || g_auto_close_request!=enabled || g_auto_close_result!=applied) {
         g_auto_close_reported=true;g_auto_close_request=enabled;g_auto_close_result=applied;
         __android_log_print(applied?ANDROID_LOG_INFO:ANDROID_LOG_WARN,kTag,
-            "folder auto-close source-word requested=%d applied=%d sites=2 immediate=1 registered/open/launch guards=original",enabled,applied);
+            "folder auto-close source-word requested=%d applied=%d sites=3 guards=mode,open(nop) scroll=skip animated-close=stock",enabled,applied);
     }
     return applied;
 }
