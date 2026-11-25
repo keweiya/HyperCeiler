@@ -18,7 +18,6 @@ import android.os.SystemClock;
 import com.sevtinge.hyperceiler.R;
 import com.sevtinge.hyperceiler.common.log.AndroidLog;
 import com.sevtinge.hyperceiler.common.log.LoggerHealthChecker;
-import com.sevtinge.hyperceiler.expansion.utils.SignUtils;
 import com.sevtinge.hyperceiler.libhook.safecrash.CrashScope;
 import com.sevtinge.hyperceiler.utils.FrameworkStatusManager;
 
@@ -179,13 +178,8 @@ public class HomePageBannerManager {
     }
 
     private static BannerBean createWarningBannerIfNeeded(Context context) {
-        if (!SignUtils.isSignCheckPass(context)) {
-            return createWarningBanner(
-                "warning_sign",
-                context.getString(R.string.headtip_warn_sign_verification_failed),
-                null
-            );
-        }
+        // 本构建使用自签名证书（与官方发布包不同），签名校验必然失败。
+        // 该告警只对官方渠道升级有意义，自编译版本不再展示「签名校验失败」横幅。
         if (isUnofficialRom(context)) {
             return createWarningBanner(
                 "warning_rom",
