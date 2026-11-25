@@ -70,6 +70,9 @@ object NativeHomeHooksOS4 {
     private external fun nativeSetDrawerTitleSize(sp: Int): Int
     private external fun nativeSetTitleColor(argb: Int): Int
 
+    /** HyperFolder: folder columns / panel width / title centring on the Dart AOT image. */
+    private external fun nativeApplyFolder(cols: Int, width: Int, titleCenter: Int): Int
+
     /** OS4 title-size injection consumes the physical provider revision, not a stale LSPosed copy. */
     fun setDesktopTitleSize(sp: Int) {
         runCatching { nativeSetDesktopTitleSize(sp.coerceIn(0, 20)) }
@@ -454,11 +457,6 @@ object NativeHomeHooksOS4 {
 
     private fun prefBoolean(key: String): Boolean =
         runCatching { PrefsBridge.getBoolean(key) }.getOrDefault(false)
-
-    private fun prefStringInt(key: String): Int =
-        runCatching { PrefsBridge.getStringAsInt(key, 0) }.getOrDefault(0)
-}
-etOrDefault(false)
 
     private fun prefStringInt(key: String): Int =
         runCatching { PrefsBridge.getStringAsInt(key, 0) }.getOrDefault(0)
