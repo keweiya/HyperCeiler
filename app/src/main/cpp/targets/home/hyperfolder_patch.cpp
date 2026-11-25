@@ -2,17 +2,16 @@
 /*
  * HyperFolder: folder layout patches for the HyperOS 4 Flutter launcher.
  *
- * Columns and panel height come from two different places in the Dart code:
- *   GridController.folderGridViewCol        -> icons per folder row (Smi)
- *   FolderGridViewGetxController.calGridHeight -> grid viewport height (double)
- *   FolderClingWidget.getFolderClingWidth   -> opened folder panel width
+ * There are two producers behind the opened folder's geometry:
+ *   GridController.folderGridViewCol            -> icons per row (Smi)
+ *   FolderGridViewGetxController.calGridHeight  -> grid viewport height (double)
  *
- * Patching only the column accessor leaves calGridHeight computing the viewport for the
- * previous row count, which is exactly the "last row clipped" symptom: the panel is tall
- * enough but the grid viewport is short. Widening the panel has the same effect on the
- * opposite axis. Until both producers are patched together, only the width of the grid
- * cells (what the columns accessor already changes) is touched and the panel keeps the
- * launcher's own height.
+ * calGridHeight computes rows = availableHeight / cellHeight and then clamps that value:
+ *   0x8ecd7c  mov x2, #2   ; min = Smi 1 row
+ *   0x8ecd80  mov x3, #8   ; max = Smi 4 rows   <-- the fold
+ * With 24 icons in 4 columns the natural row count is 6, so the viewport is capped at
+ * 4 rows and the rest is clipped. Raising the cap to Smi 12 rows keeps the default
+ * (4-column) layout on the launcher's own numbers while leaving room for 5/6 columns.
  */
 #include <android/log.h>
 #include <dlfcn.h>
@@ -27,12 +26,14 @@ namespace {
 constexpr char kTag[] = "HyperCeilerHyperFolder";
 
 /* Offsets of RELEASE-8.11.02.7755 (versionCode 811027755). */
-constexpr uint64_t kFolderColsOff = 0x8e6e7c;   /* GridController.folderGridViewCol */
-constexpr uint64_t kTextVerifyOff = 0x850000;   /* .text start marker */
+constexpr uint64_t kFolderColsOff = 0x8e6e7c;    /* GridController.folderGridViewCol */
+constexpr uint64_t kGridRowClampOff = 0x8ecd80;  /* calGridHeight: mov x3,#8 (Smi 4 rows) */
+constexpr uint64_t kTextVerifyOff = 0x850000;    /* .text start marker */
 constexpr uint32_t kTextMarker = 0x00016940u;
 
 uint64_t g_base = 0;
 char g_name[192] = {0};
+uint32_t g_cols_backup[4] = {0, 0, 0, 0};
 
 int phdr_cb(dl_phdr_info* info, size_t, void*) {
     if (info->dlpi_name == nullptr || info->dlpi_name[0] == '\0') return 0;
@@ -77,19 +78,15 @@ bool patch_words(uint64_t addr, const uint32_t* words, int count, const char* wh
              PROT_READ | PROT_EXEC);
 
     __android_log_print(ANDROID_LOG_INFO, kTag,
-                        "%s @ %#llx: %08x->%08x %08x->%08x count=%d", what,
-                        static_cast<unsigned long long>(addr), old[0], p[0],
-                        count > 1 ? old[1] : 0, count > 1 ? p[1] : 0, count);
+                        "%s @ %#llx: %08x->%08x count=%d", what,
+                        static_cast<unsigned long long>(addr), old[0], p[0], count);
     return true;
 }
 
 }  // namespace
 
 extern "C" void hpf_apply(int cols, int width, int title_center) {
-    /* The width knob is disabled: widening the panel does not widen the grid viewport,
-     * which shows up as the last row being clipped. Kept as a parameter so the settings
-     * page keeps its state, but it no longer patches anything. */
-    (void)width;
+    (void)width; /* panel width patch removed: it does not widen the grid viewport */
 
     if (cols <= 0 && title_center == 0) {
         __android_log_print(ANDROID_LOG_INFO, kTag, "everything disabled, skip");
@@ -114,6 +111,9 @@ extern "C" void hpf_apply(int cols, int width, int title_center) {
         return;
     }
 
+    auto* cols_words = reinterpret_cast<uint32_t*>(g_base + kFolderColsOff);
+    std::memcpy(g_cols_backup, cols_words, sizeof(g_cols_backup));
+
     if (cols > 0) {
         if (cols > 12) cols = 12;
         const uint32_t insns[2] = {
@@ -121,6 +121,11 @@ extern "C" void hpf_apply(int cols, int width, int title_center) {
             0xD65F03C0u,                                          /* ret */
         };
         patch_words(g_base + kFolderColsOff, insns, 2, "folderColumns");
+
+        /* Raise calGridHeight's row clamp so the viewport can hold every row.
+         * Smi 24 = 12 rows; the launcher's own 4-row cap is what clips the last row. */
+        const uint32_t clamp = 0xD2800303u; /* mov x3, #24 */
+        patch_words(g_base + kGridRowClampOff, &clamp, 1, "gridRowClamp");
     } else {
         __android_log_print(ANDROID_LOG_INFO, kTag, "folderColumns: disabled");
     }
