@@ -28,6 +28,7 @@ constexpr char kTag[] = "HyperCeilerHyperFolder";
 /* Offsets of RELEASE-8.11.02.7755 (versionCode 811027755). */
 constexpr uint64_t kFolderColsOff = 0x8e6e7c;    /* GridController.folderGridViewCol */
 constexpr uint64_t kGridRowClampOff = 0x8ecd80;  /* calGridHeight: mov x3,#8 (Smi 4 rows) */
+constexpr uint64_t kAvailHeightDivOff = 0x8ecaa8; /* calGridHeight: fmov d1,#4.0 (available/4) */
 constexpr uint64_t kTextVerifyOff = 0x850000;    /* .text start marker */
 constexpr uint32_t kTextMarker = 0x00016940u;
 
@@ -126,6 +127,11 @@ extern "C" void hpf_apply(int cols, int width, int title_center) {
          * Smi 24 = 12 rows; the launcher's own 4-row cap is what clips the last row. */
         const uint32_t clamp = 0xD2800303u; /* mov x3, #24 */
         patch_words(g_base + kGridRowClampOff, &clamp, 1, "gridRowClamp");
+
+        /* The available height for the grid is computed as base + cellHeight/4, which is
+         * what leaves room for five rows only. Divide by 2 instead so a sixth row fits. */
+        const uint32_t div2 = 0x1E601001u; /* fmov d1, #2.0 */
+        patch_words(g_base + kAvailHeightDivOff, &div2, 1, "availHeightDiv");
     } else {
         __android_log_print(ANDROID_LOG_INFO, kTag, "folderColumns: disabled");
     }
