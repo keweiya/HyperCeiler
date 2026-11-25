@@ -68,16 +68,21 @@ int main(int argc, char **argv) {
     auto plan = home_layout::resolve_folder_auto_close(click_body, click, close, rx, registered,
         close_body, scroll);
     assert(plan);
-    std::printf("plan mode=%#x open=%#x scroll=%#x branch=%#x\n",
-        click + plan->mode_gate, click + plan->open_gate, close + plan->scroll_gate, plan->scroll_branch);
+    std::printf("plan mode=%#x registered=%#x guard=%#x scroll=%#x branch=%#x\n",
+        click + plan->mode_gate, click + plan->registered_gate, click + plan->open_guard,
+        close + plan->scroll_gate, plan->scroll_branch);
     assert(click + plan->mode_gate == 0x1451218);
-    assert(click + plan->open_gate == 0x1451280);
+    assert(click + plan->registered_gate == 0x145124c);
+    assert(click + plan->open_guard == 0x1451280);
     assert(close + plan->scroll_gate == 0x1933dc8);
     assert(plan->scroll_branch == 0x14000019);
-    // The words the plan replaces must be the stock instructions HomeTweaks rewrites.
+    // The two words HomeTweaks NOPs must be the stock gates, and the
+    // isFolderClingOpen guard must remain the untouched third gate.
     assert(click_body[plan->mode_gate / 4] == 0x372006c0);
-    assert(click_body[plan->open_gate / 4] == 0x37200380);
+    assert(click_body[plan->registered_gate / 4] == 0x37200520);
+    assert(click_body[plan->open_guard / 4] == 0x37200380);
     assert(close_body[plan->scroll_gate / 4] == 0x37200322);
+    assert(plan->scroll_gate != plan->registered_gate && plan->scroll_gate != plan->mode_gate);
     // Every single-word corruption of either owner body must be refused or move the plan.
     unsigned accepted = 0, refused = 0;
     for (size_t i = 0; i < click_body.size(); ++i) {
@@ -86,7 +91,8 @@ int main(int argc, char **argv) {
             close_body, scroll);
         if (!again) { ++refused; continue; }
         ++accepted;
-        assert(again->mode_gate == plan->mode_gate && again->open_gate == plan->open_gate);
+        assert(again->mode_gate == plan->mode_gate && again->registered_gate == plan->registered_gate
+            && again->open_guard == plan->open_guard);
     }
     for (size_t i = 0; i < close_body.size(); ++i) {
         auto altered = close_body; altered[i] ^= 1u;

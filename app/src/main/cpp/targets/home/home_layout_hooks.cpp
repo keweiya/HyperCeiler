@@ -4151,7 +4151,10 @@ bool sync_folder_auto_close(bool enabled) {
             const auto plan=home_layout::resolve_folder_auto_close(body,va,close,rx,registered,close_body,scroll);
             std::array<nhk::SourceWordPatch,3> prepared{};
             bool compatible=plan.has_value();
-            const uint32_t sites[3]={plan?plan->mode_gate:0,plan?plan->open_gate:0,plan?plan->scroll_gate:0};
+            // HomeTweaks NOPs the mode and registration gates only; the
+            // isFolderClingOpen guard (plan->open_guard) stays, so a click on a
+            // desktop icon never runs the folder-close routine.
+            const uint32_t sites[3]={plan?plan->mode_gate:0,plan?plan->registered_gate:0,plan?plan->scroll_gate:0};
             const uint32_t words[3]={home_layout::kFolderAutoCloseReplacement,
                 home_layout::kFolderAutoCloseReplacement,plan?plan->scroll_branch:0};
             const uint32_t owner[3]={va,va,close};
@@ -4173,8 +4176,8 @@ bool sync_folder_auto_close(bool enabled) {
             if(compatible) {
                 g_auto_close_words=prepared;g_auto_close_generation_valid=true;
                 __android_log_print(ANDROID_LOG_INFO,kTag,
-                    "folder auto-close HomeTweaks plan mode=%#x open=%#x scroll=%#x target=%#x animated-close=stock",
-                    va+plan->mode_gate,va+plan->open_gate,close+plan->scroll_gate,
+                    "folder auto-close HomeTweaks plan mode=%#x registered=%#x guard=%#x scroll=%#x target=%#x animated-close=stock",
+                    va+plan->mode_gate,va+plan->registered_gate,va+plan->open_guard,close+plan->scroll_gate,
                     uint32_t(int64_t(close)+int64_t(plan->scroll_gate)
                         +int64_t(int32_t(plan->scroll_branch<<6)>>6)*4));
             }
@@ -4196,7 +4199,7 @@ bool sync_folder_auto_close(bool enabled) {
     if(!g_auto_close_reported || g_auto_close_request!=enabled || g_auto_close_result!=applied) {
         g_auto_close_reported=true;g_auto_close_request=enabled;g_auto_close_result=applied;
         __android_log_print(applied?ANDROID_LOG_INFO:ANDROID_LOG_WARN,kTag,
-            "folder auto-close source-word requested=%d applied=%d sites=3 guards=mode,open(nop) scroll=skip animated-close=stock",enabled,applied);
+            "folder auto-close source-word requested=%d applied=%d sites=3 nop=mode,registered scroll=skip open-guard=kept animated-close=stock",enabled,applied);
     }
     return applied;
 }

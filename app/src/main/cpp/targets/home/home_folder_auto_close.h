@@ -16,16 +16,19 @@ inline uint32_t auto_close_call(uint32_t pc, uint32_t w) {
 // HomeTweaks 81 ("folderautoclose"): a click inside an open folder must run the
 // launcher's own close-then-launch block, with the stock animated close. The stock
 // code reaches that block only when two early tests already say "folder closed", so
-// both are neutralised instead of replacing the close with a synchronous variant:
+// exactly those two are neutralised (2x NOP):
 //   1. the mode gate reading the click model (fp spill -> RxObjectMixin.value),
-//   2. the folder-open gate (registered controller -> Rx value in the heap),
-//   3. inside the close routine, the grid re-scroll gate becomes an unconditional
-//      branch, so closing no longer starts a second scroll animation.
-// The launch continuation, the registration test and every blocked-launch guard are
-// left untouched.
+//   2. the controller-registration gate (Inst|isRegistered -> tbnz).
+// The third gate -- the one reading FolderClingGetxController.isFolderClingOpen --
+// is the "a folder is really open" guard and MUST stay intact: it is what keeps
+// desktop clicks on the plain launch path. NOP'ing it (the previous port did) runs
+// the close routine on every icon click and occasionally aborts the launch.
+// Inside the close routine the grid re-scroll gate becomes an unconditional branch,
+// so closing does not start a second scroll animation.
 struct FolderAutoClosePlan {
-    uint32_t mode_gate = 0;        // byte offset in the click body
-    uint32_t open_gate = 0;        // byte offset in the click body
+    uint32_t mode_gate = 0;        // byte offset in the click body (patched)
+    uint32_t registered_gate = 0;  // byte offset in the click body (patched)
+    uint32_t open_guard = 0;       // byte offset in the click body (kept as-is)
     uint32_t scroll_gate = 0;      // byte offset in the close body
     uint32_t scroll_branch = 0;    // replacement word: b <scroll continuation>
 };
@@ -45,30 +48,36 @@ inline std::optional<FolderAutoClosePlan> resolve_folder_auto_close(
         || body[close_at - 2] != 0x910082c2 || body[close_at - 1] != 0xf9403b64) return {};
     const uint32_t end = va + uint32_t((close_at + 1) * 4);
     unsigned registered_calls = 0;
-    size_t mode = 0, open = 0; unsigned mode_hits = 0, open_hits = 0;
+    size_t mode = 0, registered_gate = 0, guard = 0;
+    unsigned mode_hits = 0, registered_hits = 0, guard_hits = 0;
     for (size_t i = 2; i < close_at; ++i) {
         if ((body[i] & 0xfc000000u) == 0x94000000u
             && auto_close_call(va + uint32_t(i * 4), body[i]) == registered) ++registered_calls;
-        // Every candidate gate is a TBNZ on the Rx result that jumps past the close.
+        // Every candidate gate is a TBNZ on the Rx/bool result that jumps past the close.
         if ((body[i] & 0xfff80000u) != 0x37200000u || (body[i] & 31u) != 0u) continue;
         int32_t jump = int32_t(((body[i] >> 5) & 0x3fffu) << 18) >> 18;
         if (int64_t(va) + int64_t(i * 4) + int64_t(jump) * 4 != end) continue;
-        if ((body[i - 1] & 0xfc000000u) != 0x94000000u
-            || auto_close_call(va + uint32_t((i - 1) * 4), body[i - 1]) != rx) continue;
-        // Mode gate: the tested value was spilled to the Dart frame by this caller.
+        if ((body[i - 1] & 0xfc000000u) != 0x94000000u) continue;
+        const uint32_t callee = auto_close_call(va + uint32_t((i - 1) * 4), body[i - 1]);
+        // Gate 2: Inst|isRegistered result. HomeTweaks NOPs this one.
+        if (callee == registered) { registered_gate = i; ++registered_hits; continue; }
+        if (callee != rx) continue;
+        // Gate 1: the tested value was spilled to the Dart frame by this caller.
         if ((body[i - 2] & 0xffe00fffu) == 0xf84003a1u && ((body[i - 2] >> 12) & 0x100)) {
             mode = i; ++mode_hits;
-        // Open gate: the tested value is a heap field of the controller, loaded
-        // through ldur w1,[x0,#imm] / add x1,x1,x28,lsl#32 just before Rx.
+        // Gate 3: isFolderClingOpen read through ldur w1,[x0,#imm] / add x1,x1,x28,lsl#32.
+        // This one is the guard that keeps desktop clicks untouched; it is validated
+        // but never rewritten.
         } else if (body[i - 2] == 0x8b1c8021u
             && (body[i - 3] & 0xffe00c00u) == 0xb8400000u
             && (body[i - 3] & 31u) == 1u && ((body[i - 3] >> 5) & 31u) == 0u) {
-            open = i; ++open_hits;
+            guard = i; ++guard_hits;
         }
     }
-    // Each gate must be unique and in stock order: mode, then open registration,
-    // then the open gate, then the close call.
-    if (mode_hits != 1 || open_hits != 1 || registered_calls != 1 || !(mode < open && open < close_at)) return {};
+    // Each gate must be unique and in stock order: mode, then registration, then the
+    // isFolderClingOpen guard, then the close call.
+    if (mode_hits != 1 || registered_hits != 1 || guard_hits != 1 || registered_calls != 1
+        || !(mode < registered_gate && registered_gate < guard && guard < close_at)) return {};
     // Scroll gate: ldur w2,[x1,#imm] / add x2,x2,x28 / tbnz w2,#4 -> continuation,
     // immediately followed by the scroll routine. Only that branch is rewritten.
     size_t scroll_at = 0, scroll_hits = 0; uint32_t branch = 0;
@@ -92,7 +101,8 @@ inline std::optional<FolderAutoClosePlan> resolve_folder_auto_close(
     if (scroll_hits != 1) return {};
     FolderAutoClosePlan plan;
     plan.mode_gate = uint32_t(mode * 4);
-    plan.open_gate = uint32_t(open * 4);
+    plan.registered_gate = uint32_t(registered_gate * 4);
+    plan.open_guard = uint32_t(guard * 4);
     plan.scroll_gate = uint32_t(scroll_at * 4);
     plan.scroll_branch = branch;
     return plan;
